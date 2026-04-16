@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-// MARK: - Shared CLI Path Resolution
+// MARK: - Shared CLI Path Resolution & Environment
 
 enum CLIPathResolver {
     static let openclawPath: String = {
@@ -12,6 +12,63 @@ enum CLIPathResolver {
         ]
         return possiblePaths.first { FileManager.default.fileExists(atPath: $0) } ?? "openclaw"
     }()
+
+    /// Build a process environment with the full PATH so that
+    /// `#!/usr/bin/env node` (and similar shebangs) can find node/python/etc.
+    /// macOS .app bundles inherit a minimal PATH that excludes Homebrew, nvm, etc.
+    static func processEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "dumb"
+        env["NO_COLOR"] = "1"
+        env["FORCE_COLOR"] = "0"
+
+        // Enrich PATH with common locations for node, python, etc.
+        let extraPaths = [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "\(NSHomeDirectory())/.npm-global/bin",
+            "\(NSHomeDirectory())/.nvm/versions/node/*/bin",  // nvm
+            "\(NSHomeDirectory())/.local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ]
+
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+        let currentParts = Set(currentPath.components(separatedBy: ":"))
+
+        // Resolve glob patterns (e.g. nvm paths)
+        var resolvedExtras: [String] = []
+        for path in extraPaths {
+            if path.contains("*") {
+                // Expand glob
+                let dir = (path as NSString).deletingLastPathComponent
+                let pattern = (path as NSString).lastPathComponent
+                if let contents = try? FileManager.default.contentsOfDirectory(atPath: dir) {
+                    for item in contents {
+                        let full = "\(dir)/\(item)/\(pattern == "*" ? "" : pattern)"
+                        let binPath = pattern == "*" ? "\(dir)/\(item)" : full
+                        if FileManager.default.fileExists(atPath: binPath) {
+                            resolvedExtras.append(binPath)
+                        }
+                    }
+                }
+            } else {
+                resolvedExtras.append(path)
+            }
+        }
+
+        // Prepend missing paths
+        let newPaths = resolvedExtras.filter { !currentParts.contains($0) }
+        if !newPaths.isEmpty {
+            env["PATH"] = (newPaths + [currentPath]).joined(separator: ":")
+        }
+
+        return env
+    }
 }
 
 // MARK: - Command Execution Record
@@ -74,12 +131,7 @@ final class CommandRunner: ObservableObject {
             let errorPipe = Pipe()
             process.standardOutput = outputPipe
             process.standardError = errorPipe
-
-            var env = ProcessInfo.processInfo.environment
-            env["TERM"] = "dumb"
-            env["NO_COLOR"] = "1"
-            env["FORCE_COLOR"] = "0"
-            process.environment = env
+            process.environment = CLIPathResolver.processEnvironment()
 
             do {
                 try process.run()

@@ -405,10 +405,7 @@ final class OpenClawBridge: ObservableObject {
             process.standardOutput = outputPipe
             process.standardError = errorPipe
 
-            var env = ProcessInfo.processInfo.environment
-            env["TERM"] = "dumb"
-            env["NO_COLOR"] = "1"
-            process.environment = env
+            process.environment = CLIPathResolver.processEnvironment()
 
             do {
                 try process.run()
@@ -471,10 +468,7 @@ final class OpenClawBridge: ObservableObject {
             process.standardOutput = pipe
             process.standardError = errPipe
 
-            var env = ProcessInfo.processInfo.environment
-            env["TERM"] = "dumb"
-            env["NO_COLOR"] = "1"
-            process.environment = env
+            process.environment = CLIPathResolver.processEnvironment()
 
             do {
                 try process.run()
@@ -516,10 +510,7 @@ final class OpenClawBridge: ObservableObject {
             process.standardOutput = pipe
             process.standardError = errPipe
 
-            var env = ProcessInfo.processInfo.environment
-            env["TERM"] = "dumb"
-            env["NO_COLOR"] = "1"
-            process.environment = env
+            process.environment = CLIPathResolver.processEnvironment()
 
             do {
                 try process.run()
