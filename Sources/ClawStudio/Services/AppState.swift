@@ -49,7 +49,7 @@ enum NavigationTab: String, CaseIterable, Identifiable {
 
 final class UserPreferences: ObservableObject {
     @AppStorage("workspacePath") var workspacePath = "~/.openclaw/workspace"
-    @AppStorage("defaultModel") var defaultModel = "anthropic/claude-sonnet-4-6"
+    @AppStorage("defaultModel") var defaultModel = "openrouter/anthropic/claude-haiku-4.5"
     @AppStorage("thinkingLevel") var thinkingLevel = "medium"
     @AppStorage("autoSave") var autoSave = true
     @AppStorage("showTokenCost") var showTokenCost = true
@@ -157,12 +157,24 @@ final class AppState: ObservableObject {
         }
     }
 
-    static let defaultAgents: [Agent] = [
-        Agent(name: "General Assistant", role: "General Purpose", description: "A versatile assistant for everyday tasks", model: "anthropic/claude-sonnet-4-6", icon: "sparkles"),
-        Agent(name: "Code Reviewer", role: "Code Review", description: "Specialized in reviewing code and suggesting improvements", model: "anthropic/claude-sonnet-4-6", color: "purple", icon: "chevron.left.forwardslash.chevron.right"),
-        Agent(name: "Research Agent", role: "Research", description: "Gathers and synthesizes information from multiple sources", model: "anthropic/claude-sonnet-4-6", color: "green", icon: "magnifyingglass"),
-        Agent(name: "DevOps Monitor", role: "Infrastructure", description: "Monitors system health and assists with deployment", model: "anthropic/claude-sonnet-4-6", color: "orange", icon: "server.rack"),
-    ]
+    static var defaultAgents: [Agent] {
+        // Read the actual default model from OpenClaw config
+        let configPath = "\(NSHomeDirectory())/.openclaw/openclaw.json"
+        var defaultModel = "openrouter/anthropic/claude-haiku-4.5"
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let agent = config["agent"] as? [String: Any],
+           let model = agent["model"] as? String {
+            defaultModel = model
+        }
+
+        return [
+            Agent(name: "General Assistant", role: "General Purpose", description: "A versatile assistant for everyday tasks", model: defaultModel, icon: "sparkles"),
+            Agent(name: "Code Reviewer", role: "Code Review", description: "Specialized in reviewing code and suggesting improvements", model: defaultModel, color: "purple", icon: "chevron.left.forwardslash.chevron.right"),
+            Agent(name: "Research Agent", role: "Research", description: "Gathers and synthesizes information from multiple sources", model: defaultModel, color: "green", icon: "magnifyingglass"),
+            Agent(name: "DevOps Monitor", role: "Infrastructure", description: "Monitors system health and assists with deployment", model: defaultModel, color: "orange", icon: "server.rack"),
+        ]
+    }
 
     // MARK: - Session Management
 

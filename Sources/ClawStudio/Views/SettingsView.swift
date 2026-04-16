@@ -94,9 +94,14 @@ struct SettingsView: View {
                             get: { appState.preferences.defaultModel },
                             set: { appState.preferences.defaultModel = $0 }
                         )) {
-                            Text("Claude Sonnet 4.6").tag("anthropic/claude-sonnet-4-6")
-                            Text("Claude Opus 4.6").tag("anthropic/claude-opus-4-6")
-                            Text("Claude Haiku 4.5").tag("anthropic/claude-haiku-4-5")
+                            let available = appState.bridge.allModels.filter { $0.available == true }
+                            if available.isEmpty {
+                                Text(appState.preferences.defaultModel).tag(appState.preferences.defaultModel)
+                            } else {
+                                ForEach(available) { model in
+                                    Text(model.name).tag(model.key)
+                                }
+                            }
                         }
                         .pickerStyle(.menu)
                     }

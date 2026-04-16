@@ -143,7 +143,7 @@ struct Agent: Identifiable, Codable, Sendable {
         name: String = "Agent",
         role: String = "General Assistant",
         description: String = "",
-        model: String = "anthropic/claude-sonnet-4-6",
+        model: String = "openrouter/anthropic/claude-haiku-4.5",
         soulMD: String = "",
         agentsMD: String = "",
         skills: [String] = [],

@@ -254,9 +254,17 @@ struct MonitoringView: View {
             }
 
             VStack(spacing: 8) {
-                CostRow(label: "Claude Sonnet 4.6", cost: totalCost * 0.6, color: GlassTheme.accentPrimary)
-                CostRow(label: "Claude Opus 4.6", cost: totalCost * 0.3, color: GlassTheme.accentSecondary)
-                CostRow(label: "Claude Haiku 4.5", cost: totalCost * 0.1, color: GlassTheme.accentTertiary)
+                // Show costs by actual models configured
+                let configuredModels = appState.bridge.configuredModels
+                let colors: [Color] = [GlassTheme.accentPrimary, GlassTheme.accentSecondary, GlassTheme.accentTertiary, .orange, .pink]
+                if configuredModels.isEmpty {
+                    CostRow(label: "No models configured", cost: 0, color: GlassTheme.textTertiary)
+                } else {
+                    let portion = 1.0 / max(Double(configuredModels.count), 1)
+                    ForEach(Array(configuredModels.prefix(5).enumerated()), id: \.element.id) { idx, model in
+                        CostRow(label: model.name, cost: totalCost * portion, color: colors[idx % colors.count])
+                    }
+                }
 
                 Divider().opacity(0.3)
 

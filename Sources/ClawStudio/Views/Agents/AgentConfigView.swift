@@ -137,6 +137,7 @@ struct AgentListCard: View {
 // MARK: - Agent Detail View
 
 struct AgentDetailView: View {
+    @EnvironmentObject var appState: AppState
     @Binding var agent: Agent
     @State private var activeDetailTab = 0
 
@@ -223,11 +224,15 @@ struct AgentDetailView: View {
                     .foregroundStyle(GlassTheme.textSecondary)
 
                 Picker("Model", selection: $agent.model) {
-                    Text("Claude Sonnet 4.6").tag("anthropic/claude-sonnet-4-6")
-                    Text("Claude Opus 4.6").tag("anthropic/claude-opus-4-6")
-                    Text("Claude Haiku 4.5").tag("anthropic/claude-haiku-4-5")
-                    Text("GPT-4o").tag("openai/gpt-4o")
-                    Text("GPT-4o Mini").tag("openai/gpt-4o-mini")
+                    let available = appState.bridge.allModels.filter { $0.available == true }
+                    if available.isEmpty {
+                        // Fallback: show current model
+                        Text(agent.model).tag(agent.model)
+                    } else {
+                        ForEach(available) { model in
+                            Text(model.name).tag(model.key)
+                        }
+                    }
                 }
                 .pickerStyle(.menu)
                 .glassCard()
