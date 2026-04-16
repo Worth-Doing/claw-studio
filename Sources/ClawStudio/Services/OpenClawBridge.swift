@@ -158,11 +158,36 @@ final class OpenClawBridge: ObservableObject {
     // MARK: - Models
 
     func loadModels() async {
+        // Load configured models (includes "default" tag)
+        if let json = await runCommand(arguments: ["models", "list", "--json"]) {
+            if let data = json.data(using: .utf8),
+               let response = try? JSONDecoder().decode(OpenClawModelsResponse.self, from: data) {
+                configuredModels = response.models
+            }
+        }
+
+        // Load all available models
         if let json = await runCommand(arguments: ["models", "list", "--all", "--json"]) {
             if let data = json.data(using: .utf8),
                let response = try? JSONDecoder().decode(OpenClawModelsResponse.self, from: data) {
-                allModels = response.models
-                configuredModels = response.models.filter { $0.available == true }
+                // Merge default tag from configured list
+                var models = response.models
+                let defaultKey = configuredModels.first(where: { $0.isDefault })?.key
+                if let defaultKey {
+                    if let idx = models.firstIndex(where: { $0.key == defaultKey }) {
+                        // The model in allModels won't have the "default" tag, add it
+                        let m = models[idx]
+                        var tags = m.tags ?? []
+                        if !tags.contains("default") { tags.append("default") }
+                        // We can't mutate the struct's let tags, so rebuild
+                        models[idx] = OpenClawModelEntry(
+                            key: m.key, name: m.name, input: m.input,
+                            contextWindow: m.contextWindow, local: m.local,
+                            available: m.available, tags: tags, missing: m.missing
+                        )
+                    }
+                }
+                allModels = models
             }
         }
     }
@@ -397,9 +422,13 @@ final class OpenClawBridge: ObservableObject {
             return nil
         }
 
-        // Get default model
-        let agentConfig = config["agent"] as? [String: Any]
-        let modelKey = (agentConfig?["model"] as? String) ?? "openrouter/anthropic/claude-3.5-haiku"
+        // Get default model — path is agents.defaults.model.primary
+        let agentsConfig = config["agents"] as? [String: Any]
+        let defaults = agentsConfig?["defaults"] as? [String: Any]
+        let modelConfig = defaults?["model"] as? [String: Any]
+        let modelKey = (modelConfig?["primary"] as? String)
+            ?? (config["agent"] as? [String: Any])?["model"] as? String
+            ?? "openrouter/anthropic/claude-3.5-haiku"
 
         // Parse provider from model key (e.g. "openrouter/anthropic/claude-3.5-haiku")
         let parts = modelKey.split(separator: "/", maxSplits: 1)

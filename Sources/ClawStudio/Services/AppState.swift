@@ -67,12 +67,21 @@ final class UserPreferences: ObservableObject {
     static func readModelFromConfig() -> String {
         let configPath = "\(NSHomeDirectory())/.openclaw/openclaw.json"
         if let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let agent = config["agent"] as? [String: Any],
-           let model = agent["model"] as? String, !model.isEmpty {
-            return model
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // Path: agents.defaults.model.primary
+            if let agents = config["agents"] as? [String: Any],
+               let defaults = agents["defaults"] as? [String: Any],
+               let modelCfg = defaults["model"] as? [String: Any],
+               let primary = modelCfg["primary"] as? String, !primary.isEmpty {
+                return primary
+            }
+            // Fallback: agent.model (legacy)
+            if let agent = config["agent"] as? [String: Any],
+               let model = agent["model"] as? String, !model.isEmpty {
+                return model
+            }
         }
-        return "openrouter/anthropic/claude-haiku-4.5"
+        return "openrouter/deepseek/deepseek-chat"
     }
 
     /// Sync the selected model back to OpenClaw config
@@ -133,6 +142,8 @@ final class AppState: ObservableObject {
 
     init() {
         loadPersistedState()
+        // Sync preferences with actual OpenClaw config
+        preferences.defaultModel = UserPreferences.readModelFromConfig()
     }
 
     // MARK: - Persistence
@@ -185,15 +196,7 @@ final class AppState: ObservableObject {
     }
 
     static var defaultAgents: [Agent] {
-        // Read the actual default model from OpenClaw config
-        let configPath = "\(NSHomeDirectory())/.openclaw/openclaw.json"
-        var defaultModel = "openrouter/anthropic/claude-haiku-4.5"
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let agent = config["agent"] as? [String: Any],
-           let model = agent["model"] as? String {
-            defaultModel = model
-        }
+        let defaultModel = UserPreferences.readModelFromConfig()
 
         return [
             Agent(name: "General Assistant", role: "General Purpose", description: "A versatile assistant for everyday tasks", model: defaultModel, icon: "sparkles"),
@@ -255,6 +258,12 @@ final class AppState: ObservableObject {
     func initialLoad() async {
         isLoading = true
         await bridge.refreshAll()
+
+        // Sync default model from what OpenClaw actually reports
+        if let defaultModel = bridge.allModels.first(where: { $0.isDefault }) {
+            preferences.defaultModel = defaultModel.key
+        }
+
         isLoading = false
     }
 
