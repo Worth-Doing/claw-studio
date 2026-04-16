@@ -310,19 +310,26 @@ final class OpenClawBridge: ObservableObject {
         }
 
         // Check config for providers not found in env (parallel)
+        // Uses static method so no [weak self] issues with @MainActor
         let unconfiguredNames = knownProviders.filter { envResults[$0.name] != true }
 
         var configResults: [String: Bool] = [:]
         await withTaskGroup(of: (String, Bool).self) { group in
             for provider in unconfiguredNames {
-                group.addTask { [weak self] in
-                    guard let self else { return (provider.name, false) }
-                    if let configVal = await self.runCommand(arguments: ["config", "get", "env.vars.\(provider.envKey)"]) {
-                        let trimmed = configVal.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let hasConfig = !trimmed.isEmpty && !trimmed.contains("not found") && !trimmed.contains("Config path")
-                        return (provider.name, hasConfig)
+                group.addTask {
+                    let (output, exitCode) = await OpenClawBridge.runCommandWithStatus(
+                        arguments: ["config", "get", "env.vars.\(provider.envKey)"]
+                    )
+                    // Only consider configured if command succeeded (exit 0) AND output is a real value
+                    guard exitCode == 0, let value = output, !value.isEmpty else {
+                        return (provider.name, false)
                     }
-                    return (provider.name, false)
+                    // Reject error messages that slip through
+                    let lower = value.lowercased()
+                    if lower.contains("not found") || lower.contains("error") || lower.contains("config path") {
+                        return (provider.name, false)
+                    }
+                    return (provider.name, true)
                 }
             }
             for await (name, hasConfig) in group {
@@ -475,6 +482,13 @@ final class OpenClawBridge: ObservableObject {
                 let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
 
+                // Only return stdout for successful commands
+                if process.terminationStatus == 0,
+                   let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                    return output
+                }
+                // For failed commands, still return output for display purposes
+                // but callers should check context
                 if let output = String(data: data, encoding: .utf8), !output.isEmpty {
                     return output
                 }
@@ -484,6 +498,38 @@ final class OpenClawBridge: ObservableObject {
                 return nil
             } catch {
                 return nil
+            }
+        }.value
+    }
+
+    /// Run a command and return (output, exitCode) — used for config checks
+    private static func runCommandWithStatus(arguments: [String]) async -> (String?, Int32) {
+        let path = CLIPathResolver.openclawPath
+
+        return await Task.detached { () -> (String?, Int32) in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = arguments
+
+            let pipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = errPipe
+
+            var env = ProcessInfo.processInfo.environment
+            env["TERM"] = "dumb"
+            env["NO_COLOR"] = "1"
+            process.environment = env
+
+            do {
+                try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (output, process.terminationStatus)
+            } catch {
+                return (nil, -1)
             }
         }.value
     }
