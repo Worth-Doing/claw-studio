@@ -45,6 +45,25 @@ enum NavigationTab: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - User Preferences (persisted)
+
+final class UserPreferences: ObservableObject {
+    @AppStorage("workspacePath") var workspacePath = "~/.openclaw/workspace"
+    @AppStorage("defaultModel") var defaultModel = "anthropic/claude-sonnet-4-6"
+    @AppStorage("thinkingLevel") var thinkingLevel = "medium"
+    @AppStorage("autoSave") var autoSave = true
+    @AppStorage("showTokenCost") var showTokenCost = true
+    @AppStorage("appearanceMode") var appearanceMode = "system" // "system", "light", "dark"
+
+    var resolvedColorScheme: ColorScheme? {
+        switch appearanceMode {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil // system
+        }
+    }
+}
+
 // MARK: - App State
 
 @MainActor
@@ -62,6 +81,7 @@ final class AppState: ObservableObject {
     @Published var isLoading = false
 
     let bridge = OpenClawBridge()
+    let preferences = UserPreferences()
 
     var activeSession: AgentSession? {
         get { sessions.first { $0.id == activeSessionId } }
@@ -72,31 +92,85 @@ final class AppState: ObservableObject {
         }
     }
 
-    init() {
-        loadDefaults()
+    // MARK: - Persistence paths
+
+    private var stateDirectory: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("ClawStudio", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
-    private func loadDefaults() {
-        let defaultSession = AgentSession(name: "Welcome")
-        sessions = [defaultSession]
-        activeSessionId = defaultSession.id
+    private var sessionsFile: URL { stateDirectory.appendingPathComponent("sessions.json") }
+    private var agentsFile: URL { stateDirectory.appendingPathComponent("agents.json") }
 
-        agents = [
-            Agent(name: "General Assistant", role: "General Purpose", description: "A versatile assistant for everyday tasks", model: "anthropic/claude-sonnet-4-6", icon: "sparkles"),
-            Agent(name: "Code Reviewer", role: "Code Review", description: "Specialized in reviewing code and suggesting improvements", model: "anthropic/claude-sonnet-4-6", color: "purple", icon: "chevron.left.forwardslash.chevron.right"),
-            Agent(name: "Research Agent", role: "Research", description: "Gathers and synthesizes information from multiple sources", model: "anthropic/claude-sonnet-4-6", color: "green", icon: "magnifyingglass"),
-            Agent(name: "DevOps Monitor", role: "Infrastructure", description: "Monitors system health and assists with deployment", model: "anthropic/claude-sonnet-4-6", color: "orange", icon: "server.rack"),
-        ]
+    init() {
+        loadPersistedState()
+    }
+
+    // MARK: - Persistence
+
+    private func loadPersistedState() {
+        // Load sessions
+        if let data = try? Data(contentsOf: sessionsFile),
+           let decoded = try? JSONDecoder().decode([AgentSession].self, from: data) {
+            sessions = decoded
+            activeSessionId = decoded.first?.id
+        }
+
+        // Load agents
+        if let data = try? Data(contentsOf: agentsFile),
+           let decoded = try? JSONDecoder().decode([Agent].self, from: data) {
+            agents = decoded
+        }
+
+        // Ensure defaults if empty
+        if sessions.isEmpty {
+            let defaultSession = AgentSession(name: "Welcome")
+            sessions = [defaultSession]
+            activeSessionId = defaultSession.id
+        }
+
+        if agents.isEmpty {
+            agents = Self.defaultAgents
+        }
 
         apiKeys = OpenClawBridge.knownProviders.map { provider in
             APIKeyEntry(service: provider.name, keyName: provider.envKey)
         }
     }
 
+    func saveState() {
+        // Save sessions
+        if let data = try? JSONEncoder().encode(sessions) {
+            try? data.write(to: sessionsFile, options: .atomic)
+        }
+        // Save agents
+        if let data = try? JSONEncoder().encode(agents) {
+            try? data.write(to: agentsFile, options: .atomic)
+        }
+    }
+
+    private func autoSaveIfEnabled() {
+        if preferences.autoSave {
+            saveState()
+        }
+    }
+
+    static let defaultAgents: [Agent] = [
+        Agent(name: "General Assistant", role: "General Purpose", description: "A versatile assistant for everyday tasks", model: "anthropic/claude-sonnet-4-6", icon: "sparkles"),
+        Agent(name: "Code Reviewer", role: "Code Review", description: "Specialized in reviewing code and suggesting improvements", model: "anthropic/claude-sonnet-4-6", color: "purple", icon: "chevron.left.forwardslash.chevron.right"),
+        Agent(name: "Research Agent", role: "Research", description: "Gathers and synthesizes information from multiple sources", model: "anthropic/claude-sonnet-4-6", color: "green", icon: "magnifyingglass"),
+        Agent(name: "DevOps Monitor", role: "Infrastructure", description: "Monitors system health and assists with deployment", model: "anthropic/claude-sonnet-4-6", color: "orange", icon: "server.rack"),
+    ]
+
+    // MARK: - Session Management
+
     func createSession(name: String, agentId: UUID? = nil) {
         let session = AgentSession(name: name, agentId: agentId)
         sessions.append(session)
         activeSessionId = session.id
+        autoSaveIfEnabled()
     }
 
     func deleteSession(_ id: UUID) {
@@ -104,13 +178,48 @@ final class AppState: ObservableObject {
         if activeSessionId == id {
             activeSessionId = sessions.first?.id
         }
+        autoSaveIfEnabled()
     }
+
+    func duplicateSession(_ id: UUID) {
+        guard let session = sessions.first(where: { $0.id == id }) else { return }
+        var copy = session
+        copy = AgentSession(
+            name: "\(session.name) (Copy)",
+            agentId: session.agentId,
+            messages: session.messages,
+            status: .idle,
+            tokenUsage: session.tokenUsage,
+            workspacePath: session.workspacePath
+        )
+        sessions.append(copy)
+        activeSessionId = copy.id
+        autoSaveIfEnabled()
+    }
+
+    func clearSession(_ id: UUID) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[idx].messages.removeAll()
+        sessions[idx].status = .idle
+        sessions[idx].updatedAt = Date()
+        autoSaveIfEnabled()
+    }
+
+    func renameSession(_ id: UUID, newName: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[idx].name = newName
+        autoSaveIfEnabled()
+    }
+
+    // MARK: - Initial Load
 
     func initialLoad() async {
         isLoading = true
         await bridge.refreshAll()
         isLoading = false
     }
+
+    // MARK: - Chat
 
     func sendMessage(_ content: String) async {
         guard var session = activeSession else { return }
@@ -126,7 +235,7 @@ final class AppState: ObservableObject {
         session.messages.append(assistantMessage)
         activeSession = session
 
-        await bridge.sendMessage(content) { @MainActor [weak self] output in
+        await bridge.sendMessage(content, thinkingLevel: preferences.thinkingLevel) { @MainActor [weak self] output in
             guard let self else { return }
             let updatedMessage = ChatMessage(id: assistantId, role: .assistant, content: output, isStreaming: false)
             if var session = self.activeSession {
@@ -136,6 +245,7 @@ final class AppState: ObservableObject {
                 session.status = .idle
                 session.updatedAt = Date()
                 self.activeSession = session
+                self.autoSaveIfEnabled()
             }
         }
     }

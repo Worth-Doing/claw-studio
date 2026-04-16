@@ -92,7 +92,7 @@ struct APIKeysView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.headerBackground)
     }
 
     // MARK: - Provider List
@@ -108,7 +108,7 @@ struct APIKeysView: View {
                     .font(.system(size: 12))
             }
             .padding(10)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -134,7 +134,7 @@ struct APIKeysView: View {
                 .padding(12)
             }
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 
     // MARK: - Provider Detail
@@ -406,6 +406,7 @@ struct ProviderListCard: View {
     let keySource: String
     var isSelected: Bool
     let onTap: () -> Void
+    @State private var isHovered = false
 
     var providerIcon: String {
         switch name.lowercased() {
@@ -466,7 +467,11 @@ struct ProviderListCard: View {
             }
             .padding(12)
             .glassCard(isSelected: isSelected)
+            .background(isHovered && !isSelected ? GlassTheme.surfaceHover.opacity(0.5) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in isHovered = hovering }
     }
 }

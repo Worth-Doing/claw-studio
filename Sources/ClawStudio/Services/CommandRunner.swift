@@ -1,6 +1,19 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Shared CLI Path Resolution
+
+enum CLIPathResolver {
+    static let openclawPath: String = {
+        let possiblePaths = [
+            "/opt/homebrew/bin/openclaw",
+            "/usr/local/bin/openclaw",
+            "\(NSHomeDirectory())/.npm-global/bin/openclaw"
+        ]
+        return possiblePaths.first { FileManager.default.fileExists(atPath: $0) } ?? "openclaw"
+    }()
+}
+
 // MARK: - Command Execution Record
 
 struct CommandRecord: Identifiable, Sendable {
@@ -34,7 +47,7 @@ enum CommandStatus: Sendable {
     case cancelled
 }
 
-// MARK: - Command Runner
+// MARK: - Command Runner (non-blocking)
 
 @MainActor
 final class CommandRunner: ObservableObject {
@@ -43,76 +56,62 @@ final class CommandRunner: ObservableObject {
     @Published var isRunning = false
 
     private var process: Process?
-    private let openclawPath: String
 
-    init() {
-        let possiblePaths = [
-            "/opt/homebrew/bin/openclaw",
-            "/usr/local/bin/openclaw",
-            "\(NSHomeDirectory())/.npm-global/bin/openclaw"
-        ]
-        self.openclawPath = possiblePaths.first { FileManager.default.fileExists(atPath: $0) } ?? "openclaw"
-    }
-
-    /// Run a command and stream output live into the UI
+    /// Run a command asynchronously without blocking the main thread
     func run(_ arguments: [String]) async -> CommandRecord {
-        // Cancel any running command
         cancel()
 
-        var record = CommandRecord(command: openclawPath, arguments: arguments)
+        var record = CommandRecord(command: CLIPathResolver.openclawPath, arguments: arguments)
         currentRecord = record
         isRunning = true
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: openclawPath)
-        process.arguments = arguments
+        let result = await Task.detached { [path = CLIPathResolver.openclawPath] () -> (String, Int32) in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = arguments
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
 
-        var env = ProcessInfo.processInfo.environment
-        env["TERM"] = "dumb"
-        env["NO_COLOR"] = "1"
-        env["FORCE_COLOR"] = "0"
-        process.environment = env
+            var env = ProcessInfo.processInfo.environment
+            env["TERM"] = "dumb"
+            env["NO_COLOR"] = "1"
+            env["FORCE_COLOR"] = "0"
+            process.environment = env
 
-        self.process = process
+            do {
+                try process.run()
 
-        do {
-            try process.run()
+                let stdoutData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
 
-            // Read stdout and stderr in parallel
-            let stdoutData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+                var fullOutput = ""
+                if let stdout = String(data: stdoutData, encoding: .utf8), !stdout.isEmpty {
+                    fullOutput += stdout
+                }
+                if let stderr = String(data: stderrData, encoding: .utf8), !stderr.isEmpty {
+                    if !fullOutput.isEmpty { fullOutput += "\n" }
+                    fullOutput += stderr
+                }
 
-            var fullOutput = ""
-            if let stdout = String(data: stdoutData, encoding: .utf8), !stdout.isEmpty {
-                fullOutput += stdout
+                return (fullOutput.trimmingCharacters(in: .whitespacesAndNewlines), process.terminationStatus)
+            } catch {
+                return ("Error launching command: \(error.localizedDescription)", -1)
             }
-            if let stderr = String(data: stderrData, encoding: .utf8), !stderr.isEmpty {
-                if !fullOutput.isEmpty { fullOutput += "\n" }
-                fullOutput += stderr
-            }
+        }.value
 
-            record.output = fullOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-            record.exitCode = process.terminationStatus
-            record.finishedAt = Date()
-            record.status = process.terminationStatus == 0 ? .success : .failed
-
-        } catch {
-            record.output = "Error launching command: \(error.localizedDescription)"
-            record.status = .failed
-            record.finishedAt = Date()
-        }
+        record.output = result.0
+        record.exitCode = result.1
+        record.finishedAt = Date()
+        record.status = result.1 == 0 ? .success : .failed
 
         currentRecord = record
         isRunning = false
-        self.process = nil
+        process = nil
 
-        // Add to history
         history.insert(record, at: 0)
         if history.count > 50 { history = Array(history.prefix(50)) }
 
@@ -149,7 +148,6 @@ struct LiveTerminalView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let record {
-                // Command header
                 if showCommand {
                     HStack(spacing: 8) {
                         Image(systemName: statusIcon(record.status))
@@ -158,7 +156,7 @@ struct LiveTerminalView: View {
 
                         Text("$ " + record.displayCommand)
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(GlassTheme.accentTertiary)
+                            .foregroundStyle(GlassTheme.terminalGreen)
                             .lineLimit(1)
 
                         Spacer()
@@ -169,42 +167,38 @@ struct LiveTerminalView: View {
                         } else if let exitCode = record.exitCode {
                             Text("exit \(exitCode)")
                                 .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(GlassTheme.textTertiary)
+                                .foregroundStyle(GlassTheme.terminalText.opacity(0.5))
                         }
 
                         if let elapsed = record.finishedAt {
                             Text(formatDuration(from: record.startedAt, to: elapsed))
                                 .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(GlassTheme.textTertiary)
+                                .foregroundStyle(GlassTheme.terminalText.opacity(0.5))
                         }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(GlassTheme.terminalBg)
+                    .background(GlassTheme.terminalBg.opacity(0.8))
                 }
 
-                // Output
                 ScrollView {
-                    ScrollViewReader { proxy in
-                        VStack(alignment: .leading, spacing: 0) {
-                            if record.output.isEmpty && record.status == .running {
-                                HStack(spacing: 6) {
-                                    ProgressView().scaleEffect(0.6)
-                                    Text("Running...")
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(GlassTheme.textTertiary)
-                                }
-                                .padding(12)
-                            } else {
-                                Text(record.output)
+                    VStack(alignment: .leading, spacing: 0) {
+                        if record.output.isEmpty && record.status == .running {
+                            HStack(spacing: 6) {
+                                ProgressView().scaleEffect(0.6)
+                                Text("Running...")
                                     .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(GlassTheme.textSecondary)
-                                    .textSelection(.enabled)
-                                    .lineSpacing(2)
-                                    .padding(12)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id("bottom")
+                                    .foregroundStyle(GlassTheme.terminalText.opacity(0.5))
                             }
+                            .padding(12)
+                        } else {
+                            Text(record.output)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(GlassTheme.terminalText)
+                                .textSelection(.enabled)
+                                .lineSpacing(2)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }
@@ -213,7 +207,7 @@ struct LiveTerminalView: View {
                 HStack {
                     Text("No command output")
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(GlassTheme.textTertiary)
+                        .foregroundStyle(GlassTheme.terminalText.opacity(0.5))
                 }
                 .padding(12)
             }
@@ -240,7 +234,7 @@ struct LiveTerminalView: View {
         case .running: return GlassTheme.accentWarning
         case .success: return GlassTheme.accentSuccess
         case .failed: return GlassTheme.accentError
-        case .cancelled: return GlassTheme.textTertiary
+        case .cancelled: return GlassTheme.terminalText.opacity(0.5)
         }
     }
 

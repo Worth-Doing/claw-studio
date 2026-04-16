@@ -8,6 +8,7 @@ struct IntegrationsView: View {
     @State private var channelToken = ""
     @State private var isLoadingSkills = false
     @State private var skillSearchQuery = ""
+    @State private var installSlug = ""
 
     @StateObject private var runner = CommandRunner()
 
@@ -34,7 +35,7 @@ struct IntegrationsView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -115,7 +116,7 @@ struct IntegrationsView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.headerBackground)
     }
 
     // MARK: - Channels Panel
@@ -297,7 +298,7 @@ struct IntegrationsView: View {
             }
             .padding(20)
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 
     // MARK: - Skills Panel
@@ -365,7 +366,6 @@ struct IntegrationsView: View {
 
             // Skill install
             HStack(spacing: 8) {
-                @State var installSlug = ""
                 TextField("Skill slug to install...", text: $installSlug)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
@@ -485,6 +485,7 @@ struct ChannelCard: View {
     let isConnected: Bool
     var isSelected: Bool
     let onTap: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: onTap) {
@@ -526,8 +527,11 @@ struct ChannelCard: View {
             }
             .padding(12)
             .glassCard(isSelected: isSelected)
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in isHovered = hovering }
     }
 }
 

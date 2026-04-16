@@ -87,7 +87,7 @@ struct SkillsManagerView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.headerBackground)
     }
 
     private var skillsGrid: some View {
@@ -123,7 +123,7 @@ struct SkillsManagerView: View {
                 Spacer()
             }
             .padding(14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -150,7 +150,7 @@ struct SkillsManagerView: View {
                 .padding(12)
             }
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 }
 

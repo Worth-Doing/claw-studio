@@ -4,7 +4,6 @@ struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @State private var messageText = ""
     @State private var showThinkingPanel = false
-    @State private var thinkingLevel = "medium"
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -42,7 +41,7 @@ struct ChatView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(GlassTheme.textTertiary)
 
-                        Text("·")
+                        Text("\u{00B7}")
                             .foregroundStyle(GlassTheme.textTertiary)
 
                         Text("\(session.messages.count) messages")
@@ -55,7 +54,10 @@ struct ChatView: View {
             Spacer()
 
             // Thinking level picker
-            Picker("Thinking", selection: $thinkingLevel) {
+            Picker("Thinking", selection: Binding(
+                get: { appState.preferences.thinkingLevel },
+                set: { appState.preferences.thinkingLevel = $0 }
+            )) {
                 Text("Low").tag("low")
                 Text("Medium").tag("medium")
                 Text("High").tag("high")
@@ -64,18 +66,43 @@ struct ChatView: View {
             .frame(width: 200)
 
             Button {
-                showThinkingPanel.toggle()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showThinkingPanel.toggle()
+                }
             } label: {
-                Image(systemName: showThinkingPanel ? "sidebar.right" : "sidebar.right")
+                Image(systemName: "sidebar.right")
                     .font(.system(size: 14))
                     .foregroundStyle(showThinkingPanel ? GlassTheme.accentPrimary : GlassTheme.textSecondary)
             }
             .glassButton(isActive: showThinkingPanel)
             .buttonStyle(.plain)
+            .help("Toggle Thinking Panel")
+
+            Menu {
+                Button("Clear Messages") {
+                    if let id = appState.activeSessionId {
+                        appState.clearSession(id)
+                    }
+                }
+                Button("Duplicate Session") {
+                    if let id = appState.activeSessionId {
+                        appState.duplicateSession(id)
+                    }
+                }
+                Divider()
+                Button("Export as Text") {
+                    exportSession()
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(GlassTheme.textSecondary)
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.headerBackground)
     }
 
     // MARK: - Messages
@@ -91,11 +118,16 @@ struct ChatView: View {
                             ForEach(session.messages) { message in
                                 MessageBubble(message: message)
                                     .id(message.id)
+                                    .transition(.asymmetric(
+                                        insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                        removal: .opacity
+                                    ))
                             }
                         }
                     }
                 }
                 .padding(20)
+                .animation(.easeOut(duration: 0.25), value: appState.activeSession?.messages.count)
             }
             .onChange(of: appState.activeSession?.messages.count) { _, _ in
                 if let lastId = appState.activeSession?.messages.last?.id {
@@ -145,7 +177,7 @@ struct ChatView: View {
                     isInputFocused = true
                 }
                 QuickActionCard(icon: "magnifyingglass", title: "Research", subtitle: "Search and gather info") {
-                    messageText = "Research the latest trends in "
+                    messageText = "Help me research "
                     isInputFocused = true
                 }
             }
@@ -170,6 +202,7 @@ struct ChatView: View {
                         .foregroundStyle(GlassTheme.textTertiary)
                 }
                 .buttonStyle(.plain)
+                .help("Attach file")
 
                 // Text input
                 TextField("Message your agent...", text: $messageText, axis: .vertical)
@@ -189,7 +222,7 @@ struct ChatView: View {
                         Circle()
                             .fill(
                                 LinearGradient(
-                                    colors: messageText.isEmpty
+                                    colors: messageText.isEmpty && !appState.bridge.isRunning
                                         ? [GlassTheme.surfaceSecondary, GlassTheme.surfaceSecondary]
                                         : [GlassTheme.accentPrimary, GlassTheme.accentSecondary],
                                     startPoint: .topLeading,
@@ -211,9 +244,10 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !appState.bridge.isRunning)
+                .keyboardShortcut(.return, modifiers: .command)
             }
             .padding(16)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
         }
     }
 
@@ -231,6 +265,17 @@ struct ChatView: View {
             await appState.sendMessage(content)
         }
     }
+
+    private func exportSession() {
+        guard let session = appState.activeSession else { return }
+        let text = session.messages.map { msg in
+            let role = msg.role == .user ? "You" : "Agent"
+            return "[\(role)] \(msg.content)"
+        }.joined(separator: "\n\n---\n\n")
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
 }
 
 // MARK: - Quick Action Card
@@ -240,6 +285,7 @@ struct QuickActionCard: View {
     let title: String
     let subtitle: String
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -257,8 +303,11 @@ struct QuickActionCard: View {
             }
             .frame(width: 150, height: 100)
             .glassCard()
+            .scaleEffect(isHovered ? 1.03 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in isHovered = hovering }
     }
 }
 
@@ -289,16 +338,9 @@ struct MessageBubble: View {
 
                 // Content
                 if message.isStreaming && message.content.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(0..<3, id: \.self) { i in
-                            Circle()
-                                .fill(GlassTheme.accentPrimary)
-                                .frame(width: 6, height: 6)
-                                .opacity(0.6)
-                        }
-                    }
-                    .padding(12)
-                    .glassCard()
+                    StreamingDotsView()
+                        .padding(12)
+                        .glassCard()
                 } else {
                     Text(message.content)
                         .font(.system(size: 13.5))
@@ -311,7 +353,7 @@ struct MessageBubble: View {
                                     .fill(GlassTheme.accentPrimary.opacity(0.12))
                             } else {
                                 RoundedRectangle(cornerRadius: 14)
-                                    .fill(Color.white.opacity(0.9))
+                                    .fill(GlassTheme.cardBackground)
                             }
                         }
                         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -319,6 +361,13 @@ struct MessageBubble: View {
                             RoundedRectangle(cornerRadius: 14)
                                 .strokeBorder(GlassTheme.borderSubtle, lineWidth: 0.5)
                         )
+                        .contextMenu {
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(message.content, forType: .string)
+                            }
+                            Button("Select All") {}
+                        }
                 }
 
                 // Tool calls
@@ -360,10 +409,45 @@ struct MessageBubble: View {
             Circle()
                 .fill(GlassTheme.surfaceElevated)
                 .frame(width: 30, height: 30)
+                .overlay(
+                    Circle()
+                        .strokeBorder(GlassTheme.borderSubtle, lineWidth: 0.5)
+                )
 
             Image(systemName: "person.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(GlassTheme.textSecondary)
+        }
+    }
+}
+
+// MARK: - Streaming Dots Animation
+
+struct StreamingDotsView: View {
+    @State private var animationPhase: Int = 0
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(GlassTheme.accentPrimary)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(animationPhase == i ? 1.3 : 0.7)
+                    .opacity(animationPhase == i ? 1.0 : 0.4)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: false)) {
+                startAnimation()
+            }
+        }
+    }
+
+    private func startAnimation() {
+        Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                animationPhase = (animationPhase + 1) % 3
+            }
         }
     }
 }
@@ -433,6 +517,7 @@ struct ToolCallView: View {
                 .padding(8)
                 .background(GlassTheme.surfaceSecondary)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(10)
@@ -455,33 +540,45 @@ struct ThinkingPanel: View {
                 Spacer()
             }
             .padding(14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(messages.filter { $0.role == .assistant }) { message in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(message.timestamp, style: .time)
-                                .font(.system(size: 10))
+                    if messages.filter({ $0.role == .assistant }).isEmpty {
+                        VStack(spacing: 10) {
+                            Image(systemName: "brain")
+                                .font(.system(size: 24))
                                 .foregroundStyle(GlassTheme.textTertiary)
-
-                            Text(message.content.prefix(500))
-                                .font(.system(size: 11))
-                                .foregroundStyle(GlassTheme.textSecondary)
-                                .lineSpacing(3)
+                            Text("Agent thoughts will appear here")
+                                .font(.system(size: 12))
+                                .foregroundStyle(GlassTheme.textTertiary)
                         }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(GlassTheme.surfaceSecondary)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                    } else {
+                        ForEach(messages.filter { $0.role == .assistant }) { message in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(message.timestamp, style: .time)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(GlassTheme.textTertiary)
+
+                                Text(message.content.prefix(500))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(GlassTheme.textSecondary)
+                                    .lineSpacing(3)
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(GlassTheme.surfaceSecondary)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
                     }
                 }
                 .padding(12)
             }
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 }
-

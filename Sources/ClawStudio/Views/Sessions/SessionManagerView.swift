@@ -101,7 +101,7 @@ struct SessionManagerView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.headerBackground)
     }
 
     private var statsRow: some View {
@@ -190,6 +190,7 @@ struct SessionCard: View {
     var isActive: Bool
     let onTap: () -> Void
     let onDelete: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: onTap) {
@@ -229,8 +230,11 @@ struct SessionCard: View {
             }
             .padding(16)
             .glassCard(isSelected: isActive)
+            .scaleEffect(isHovered ? 1.01 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in isHovered = hovering }
     }
 }
 

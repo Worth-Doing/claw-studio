@@ -3,12 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedSettingsTab = 0
-    @State private var workspacePath = "~/.openclaw/workspace"
-    @State private var defaultModel = "anthropic/claude-sonnet-4-6"
-    @State private var thinkingLevel = "medium"
-    @State private var autoSave = true
-    @State private var showTokenCost = true
-    @State private var darkMode = true
     @State private var diagnosticOutput = ""
 
     var body: some View {
@@ -26,7 +20,7 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -52,7 +46,7 @@ struct SettingsView: View {
                 }
                 .frame(width: 180)
                 .padding(10)
-                .background(Color.white.opacity(0.7))
+                .background(GlassTheme.sidebarBackground)
 
                 // Settings content
                 ScrollView {
@@ -81,8 +75,11 @@ struct SettingsView: View {
                     Text("Workspace Path")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(GlassTheme.textSecondary)
-                    TextField("Path", text: $workspacePath)
-                        .glassTextField()
+                    TextField("Path", text: Binding(
+                        get: { appState.preferences.workspacePath },
+                        set: { appState.preferences.workspacePath = $0 }
+                    ))
+                    .glassTextField()
                 }
             }
 
@@ -93,7 +90,10 @@ struct SettingsView: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(GlassTheme.textSecondary)
 
-                        Picker("Model", selection: $defaultModel) {
+                        Picker("Model", selection: Binding(
+                            get: { appState.preferences.defaultModel },
+                            set: { appState.preferences.defaultModel = $0 }
+                        )) {
                             Text("Claude Sonnet 4.6").tag("anthropic/claude-sonnet-4-6")
                             Text("Claude Opus 4.6").tag("anthropic/claude-opus-4-6")
                             Text("Claude Haiku 4.5").tag("anthropic/claude-haiku-4-5")
@@ -106,7 +106,10 @@ struct SettingsView: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(GlassTheme.textSecondary)
 
-                        Picker("Thinking", selection: $thinkingLevel) {
+                        Picker("Thinking", selection: Binding(
+                            get: { appState.preferences.thinkingLevel },
+                            set: { appState.preferences.thinkingLevel = $0 }
+                        )) {
                             Text("Low").tag("low")
                             Text("Medium").tag("medium")
                             Text("High").tag("high")
@@ -118,10 +121,46 @@ struct SettingsView: View {
 
             SettingsSection(title: "Behavior") {
                 VStack(spacing: 12) {
-                    Toggle("Auto-save sessions", isOn: $autoSave)
-                    Toggle("Show token costs in chat", isOn: $showTokenCost)
+                    Toggle("Auto-save sessions", isOn: Binding(
+                        get: { appState.preferences.autoSave },
+                        set: { appState.preferences.autoSave = $0 }
+                    ))
+                    Toggle("Show token costs in chat", isOn: Binding(
+                        get: { appState.preferences.showTokenCost },
+                        set: { appState.preferences.showTokenCost = $0 }
+                    ))
                 }
                 .font(.system(size: 13))
+            }
+
+            SettingsSection(title: "Data") {
+                VStack(spacing: 10) {
+                    Button {
+                        appState.saveState()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Save State Now")
+                        }
+                        .font(.system(size: 12))
+                        .frame(maxWidth: .infinity)
+                    }
+                    .glassButton(isActive: true)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        appState.agents = AppState.defaultAgents
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Reset Agents to Default")
+                        }
+                        .font(.system(size: 12))
+                        .frame(maxWidth: .infinity)
+                    }
+                    .glassButton()
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -156,6 +195,17 @@ struct SettingsView: View {
                             .font(.system(size: 12, design: .monospaced))
                     }
 
+                    HStack {
+                        Text("CLI Path")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(GlassTheme.textSecondary)
+                        Spacer()
+                        Text(CLIPathResolver.openclawPath)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(GlassTheme.textTertiary)
+                            .textSelection(.enabled)
+                    }
+
                     Divider().opacity(0.3)
 
                     Button {
@@ -175,20 +225,34 @@ struct SettingsView: View {
 
             SettingsSection(title: "API Keys") {
                 VStack(spacing: 8) {
-                    ForEach(appState.apiKeys) { key in
+                    ForEach(appState.bridge.providers) { provider in
                         HStack {
-                            Text(key.service)
+                            Text(provider.provider)
                                 .font(.system(size: 12, weight: .medium))
                             Spacer()
-                            Text(key.keyName)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(GlassTheme.textTertiary)
-                            Circle()
-                                .fill(key.isConfigured ? GlassTheme.accentSuccess : GlassTheme.textTertiary)
-                                .frame(width: 8, height: 8)
+                            if provider.isConfigured {
+                                HStack(spacing: 4) {
+                                    Text("via \(provider.keySource)")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(GlassTheme.textTertiary)
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(GlassTheme.accentSuccess)
+                                }
+                            } else {
+                                Image(systemName: "circle.dashed")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(GlassTheme.textTertiary)
+                            }
                         }
                         .padding(10)
                         .glassCard()
+                    }
+
+                    if appState.bridge.providers.isEmpty {
+                        Text("Refresh engine to load provider status")
+                            .font(.system(size: 12))
+                            .foregroundStyle(GlassTheme.textTertiary)
                     }
                 }
             }
@@ -200,11 +264,24 @@ struct SettingsView: View {
     private var appearanceSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             SettingsSection(title: "Theme") {
-                Toggle("Dark Mode", isOn: $darkMode)
-                    .font(.system(size: 13))
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Appearance Mode")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(GlassTheme.textSecondary)
+
+                    Picker("Appearance", selection: Binding(
+                        get: { appState.preferences.appearanceMode },
+                        set: { appState.preferences.appearanceMode = $0 }
+                    )) {
+                        Label("System", systemImage: "laptopcomputer").tag("system")
+                        Label("Light", systemImage: "sun.max.fill").tag("light")
+                        Label("Dark", systemImage: "moon.fill").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
+                }
             }
 
-            SettingsSection(title: "Preview") {
+            SettingsSection(title: "Color Palette Preview") {
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
                         ColorSwatch(color: GlassTheme.accentPrimary, label: "Primary")
@@ -213,6 +290,34 @@ struct SettingsView: View {
                         ColorSwatch(color: GlassTheme.accentSuccess, label: "Success")
                         ColorSwatch(color: GlassTheme.accentWarning, label: "Warning")
                         ColorSwatch(color: GlassTheme.accentError, label: "Error")
+                    }
+
+                    Divider().opacity(0.3)
+
+                    HStack(spacing: 12) {
+                        VStack(spacing: 4) {
+                            Text("Primary Text")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(GlassTheme.textPrimary)
+                            Text("Secondary Text")
+                                .font(.system(size: 11))
+                                .foregroundStyle(GlassTheme.textSecondary)
+                            Text("Tertiary Text")
+                                .font(.system(size: 11))
+                                .foregroundStyle(GlassTheme.textTertiary)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .glassCard()
+
+                        VStack(spacing: 4) {
+                            Text("Glass Card")
+                                .font(.system(size: 11, weight: .medium))
+                            GlassBadge(text: "Badge", color: GlassTheme.accentPrimary)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .glassCard(isSelected: true)
                     }
                 }
             }
@@ -247,13 +352,26 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
 
                     if !diagnosticOutput.isEmpty {
-                        Text(diagnosticOutput)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(GlassTheme.textSecondary)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .glassCard()
+                        ScrollView {
+                            Text(diagnosticOutput)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(GlassTheme.terminalText)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 300)
+                        .background(GlassTheme.terminalBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
+                }
+            }
+
+            SettingsSection(title: "App Info") {
+                VStack(spacing: 8) {
+                    InfoRow(label: "App Version", value: "2.0.0")
+                    InfoRow(label: "Swift", value: "5.9+")
+                    InfoRow(label: "Platform", value: "macOS 14+")
+                    InfoRow(label: "State Path", value: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("ClawStudio").path ?? "N/A")
                 }
             }
         }
@@ -286,7 +404,7 @@ struct SettingsView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(GlassTheme.textSecondary)
 
-            Text("Version 1.0.0")
+            Text("Version 2.0.0")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(GlassTheme.textTertiary)
 
@@ -299,6 +417,9 @@ struct SettingsView: View {
                 Text("Powered by OpenClaw Runtime")
                     .font(.system(size: 12))
                     .foregroundStyle(GlassTheme.textSecondary)
+                Text("Dark Mode + Adaptive UI")
+                    .font(.system(size: 12))
+                    .foregroundStyle(GlassTheme.accentTertiary)
             }
         }
         .frame(maxWidth: .infinity)
@@ -313,6 +434,7 @@ struct SettingsTabButton: View {
     let icon: String
     var isSelected: Bool
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -327,10 +449,16 @@ struct SettingsTabButton: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(isSelected ? GlassTheme.accentPrimary.opacity(0.12) : Color.clear)
+            .background(
+                isSelected
+                    ? GlassTheme.accentPrimary.opacity(0.12)
+                    : (isHovered ? GlassTheme.surfaceHover : Color.clear)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in isHovered = hovering }
     }
 }
 
@@ -359,6 +487,10 @@ struct ColorSwatch: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(color)
                 .frame(width: 40, height: 40)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+                )
 
             Text(label)
                 .font(.system(size: 9))

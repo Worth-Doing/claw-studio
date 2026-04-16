@@ -42,7 +42,7 @@ struct FilesystemView: View {
                 .buttonStyle(.plain)
             }
             .padding(14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -78,7 +78,7 @@ struct FilesystemView: View {
                 }
             }
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 
     private var fileContentPanel: some View {
@@ -103,7 +103,7 @@ struct FilesystemView: View {
                 Spacer()
             }
             .padding(14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 

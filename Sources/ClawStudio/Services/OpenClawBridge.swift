@@ -31,7 +31,7 @@ struct OpenClawModelsResponse: Codable, Sendable {
 
 struct OpenClawSkillEntry: Identifiable, Sendable {
     var id: String { name }
-    let status: String       // "ready", "needs setup"
+    let status: String
     let icon: String
     let name: String
     let description: String
@@ -53,7 +53,7 @@ struct ProviderAuthEntry: Identifiable, Sendable {
     var id: String { provider }
     let provider: String
     let isConfigured: Bool
-    let keySource: String // "env", "config", "none"
+    let keySource: String
 }
 
 struct GatewayStatus: Sendable {
@@ -76,7 +76,6 @@ final class OpenClawBridge: ObservableObject {
     @Published var engineVersion = "Unknown"
     @Published var isEngineAvailable = false
 
-    // Real data from OpenClaw
     @Published var allModels: [OpenClawModelEntry] = []
     @Published var configuredModels: [OpenClawModelEntry] = []
     @Published var skills: [OpenClawSkillEntry] = []
@@ -88,7 +87,6 @@ final class OpenClawBridge: ObservableObject {
     @Published var statusOutput: String = ""
 
     private var process: Process?
-    private let openclawPath: String
 
     static let knownProviders: [(name: String, envKey: String, docURL: String)] = [
         ("Anthropic", "ANTHROPIC_API_KEY", "https://console.anthropic.com/"),
@@ -132,15 +130,6 @@ final class OpenClawBridge: ObservableObject {
         ("qq", "person.2.fill", "QQ messenger integration"),
         ("webchat", "globe", "Web Chat widget"),
     ]
-
-    init() {
-        let possiblePaths = [
-            "/opt/homebrew/bin/openclaw",
-            "/usr/local/bin/openclaw",
-            "\(NSHomeDirectory())/.npm-global/bin/openclaw"
-        ]
-        self.openclawPath = possiblePaths.first { FileManager.default.fileExists(atPath: $0) } ?? "openclaw"
-    }
 
     // MARK: - Engine Check
 
@@ -197,10 +186,9 @@ final class OpenClawBridge: ObservableObject {
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // Parse table rows: │ Status │ Icon+Name │ Description │ Source │
-            guard trimmed.hasPrefix("│") && !trimmed.contains("Status") && !trimmed.contains("───") else { continue }
+            guard trimmed.hasPrefix("\u{2502}") && !trimmed.contains("Status") && !trimmed.contains("\u{2500}\u{2500}\u{2500}") else { continue }
 
-            let columns = trimmed.split(separator: "│", omittingEmptySubsequences: false)
+            let columns = trimmed.split(separator: "\u{2502}", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
 
@@ -213,7 +201,6 @@ final class OpenClawBridge: ObservableObject {
 
             let status = statusRaw.contains("ready") ? "ready" : "needs setup"
 
-            // Extract icon (emoji) and name
             var icon = ""
             var name = nameField
             if let firstSpace = nameField.firstIndex(of: " "),
@@ -255,15 +242,12 @@ final class OpenClawBridge: ObservableObject {
             status.isReachable = true
         }
 
-        // Parse gateway address
         if let range = output.range(of: "ws://[^ ]+", options: .regularExpression) {
             status.address = String(output[range])
         }
 
-        // Parse service status
         status.serviceInstalled = !output.contains("not installed")
 
-        // Parse security issues
         let lines = output.components(separatedBy: "\n")
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -272,7 +256,6 @@ final class OpenClawBridge: ObservableObject {
             }
         }
 
-        // Parse session/agent counts
         for line in lines {
             if line.contains("Agents") {
                 if let match = line.range(of: "\\d+", options: .regularExpression) {
@@ -285,11 +268,7 @@ final class OpenClawBridge: ObservableObject {
                 }
             }
             if line.contains("Memory") {
-                if line.contains("enabled") {
-                    status.memoryStatus = "enabled"
-                } else {
-                    status.memoryStatus = "disabled"
-                }
+                status.memoryStatus = line.contains("enabled") ? "enabled" : "disabled"
             }
         }
 
@@ -318,24 +297,43 @@ final class OpenClawBridge: ObservableObject {
         return result != nil
     }
 
-    // MARK: - Providers / Auth
+    // MARK: - Providers / Auth (parallel loading)
 
     func loadProviders() async {
-        var entries: [ProviderAuthEntry] = []
-        for provider in Self.knownProviders {
-            // Check environment variable first
-            let envValue = ProcessInfo.processInfo.environment[provider.envKey]
-            let hasEnv = envValue != nil && !(envValue?.isEmpty ?? true)
+        let knownProviders = Self.knownProviders
 
-            // Then check openclaw config for the key
-            var hasConfig = false
-            if !hasEnv {
-                if let configVal = await runCommand(arguments: ["config", "get", "env.vars.\(provider.envKey)"]) {
-                    let trimmed = configVal.trimmingCharacters(in: .whitespacesAndNewlines)
-                    hasConfig = !trimmed.isEmpty && !trimmed.contains("not found") && !trimmed.contains("Config path")
+        // Check env vars locally (fast, no subprocess)
+        var envResults: [String: Bool] = [:]
+        for provider in knownProviders {
+            let envValue = ProcessInfo.processInfo.environment[provider.envKey]
+            envResults[provider.name] = envValue != nil && !(envValue?.isEmpty ?? true)
+        }
+
+        // Check config for providers not found in env (parallel)
+        let unconfiguredNames = knownProviders.filter { envResults[$0.name] != true }
+
+        var configResults: [String: Bool] = [:]
+        await withTaskGroup(of: (String, Bool).self) { group in
+            for provider in unconfiguredNames {
+                group.addTask { [weak self] in
+                    guard let self else { return (provider.name, false) }
+                    if let configVal = await self.runCommand(arguments: ["config", "get", "env.vars.\(provider.envKey)"]) {
+                        let trimmed = configVal.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let hasConfig = !trimmed.isEmpty && !trimmed.contains("not found") && !trimmed.contains("Config path")
+                        return (provider.name, hasConfig)
+                    }
+                    return (provider.name, false)
                 }
             }
+            for await (name, hasConfig) in group {
+                configResults[name] = hasConfig
+            }
+        }
 
+        var entries: [ProviderAuthEntry] = []
+        for provider in knownProviders {
+            let hasEnv = envResults[provider.name] ?? false
+            let hasConfig = configResults[provider.name] ?? false
             let isConfigured = hasEnv || hasConfig
             let source = hasEnv ? "env" : (hasConfig ? "config" : "none")
 
@@ -373,7 +371,7 @@ final class OpenClawBridge: ObservableObject {
         return await runCommand(arguments: ["doctor"]) ?? "Doctor check failed"
     }
 
-    func runDoctor(onOutput: @escaping @Sendable (String) -> Void) async {
+    func runDoctor(onOutput: @escaping @MainActor @Sendable (String) -> Void) async {
         let result = await runCommand(arguments: ["doctor"])
         if let output = result {
             await MainActor.run {
@@ -382,46 +380,46 @@ final class OpenClawBridge: ObservableObject {
         }
     }
 
-    // MARK: - Agent Message
+    // MARK: - Agent Message (non-blocking)
 
-    func sendMessage(_ message: String, thinkingLevel: String = "medium", onOutput: @escaping @Sendable (String) -> Void) async {
+    func sendMessage(_ message: String, thinkingLevel: String = "medium", onOutput: @escaping @MainActor @Sendable (String) -> Void) async {
         isRunning = true
         defer { isRunning = false }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: openclawPath)
-        process.arguments = ["agent", "--message", message, "--thinking", thinkingLevel]
+        let path = CLIPathResolver.openclawPath
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        let result = await Task.detached { () -> String in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = ["agent", "--message", message, "--thinking", thinkingLevel]
 
-        var env = ProcessInfo.processInfo.environment
-        env["TERM"] = "dumb"
-        env["NO_COLOR"] = "1"
-        process.environment = env
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
 
-        do {
-            try process.run()
-            self.process = process
+            var env = ProcessInfo.processInfo.environment
+            env["TERM"] = "dumb"
+            env["NO_COLOR"] = "1"
+            process.environment = env
 
-            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8) {
-                let cleaned = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !cleaned.isEmpty {
-                    await MainActor.run {
-                        onOutput(cleaned)
-                        self.lastOutput = cleaned
-                    }
+            do {
+                try process.run()
+                let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+
+                if let output = String(data: data, encoding: .utf8) {
+                    return output.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
+                return ""
+            } catch {
+                return "Error: \(error.localizedDescription)"
             }
+        }.value
 
-            process.waitUntilExit()
-        } catch {
-            await MainActor.run {
-                onOutput("Error: \(error.localizedDescription)")
-            }
+        if !result.isEmpty {
+            onOutput(result)
+            lastOutput = result
         }
     }
 
@@ -451,39 +449,43 @@ final class OpenClawBridge: ObservableObject {
         return await runCommand(arguments: ["channels", "remove", channel]) ?? "Failed to remove channel"
     }
 
-    // MARK: - Private
+    // MARK: - Private (non-blocking)
 
     private func runCommand(arguments: [String]) async -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: openclawPath)
-        process.arguments = arguments
+        let path = CLIPathResolver.openclawPath
 
-        let pipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = errPipe
+        return await Task.detached { () -> String? in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = arguments
 
-        var env = ProcessInfo.processInfo.environment
-        env["TERM"] = "dumb"
-        env["NO_COLOR"] = "1"
-        process.environment = env
+            let pipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = errPipe
 
-        do {
-            try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+            var env = ProcessInfo.processInfo.environment
+            env["TERM"] = "dumb"
+            env["NO_COLOR"] = "1"
+            process.environment = env
 
-            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                return output
+            do {
+                try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+
+                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                    return output
+                }
+                if let errOutput = String(data: errData, encoding: .utf8), !errOutput.isEmpty {
+                    return errOutput
+                }
+                return nil
+            } catch {
+                return nil
             }
-            if let errOutput = String(data: errData, encoding: .utf8), !errOutput.isEmpty {
-                return errOutput
-            }
-            return nil
-        } catch {
-            return nil
-        }
+        }.value
     }
 }
 

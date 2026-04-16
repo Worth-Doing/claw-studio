@@ -110,7 +110,7 @@ struct ModelBrowserView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.headerBackground)
     }
 
     // MARK: - Model List
@@ -143,7 +143,7 @@ struct ModelBrowserView: View {
                     .scaleEffect(0.8)
             }
             .padding(10)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 

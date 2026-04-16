@@ -60,7 +60,7 @@ struct AgentConfigView: View {
                 .buttonStyle(.plain)
             }
             .padding(14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -77,7 +77,7 @@ struct AgentConfigView: View {
                 .padding(12)
             }
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 
     private var emptyState: some View {
@@ -178,7 +178,7 @@ struct AgentDetailView: View {
                     .labelsHidden()
             }
             .padding(20)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -377,7 +377,7 @@ struct PipelineEditorView: View {
                 .buttonStyle(.plain)
             }
             .padding(16)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -419,7 +419,7 @@ struct PipelineGridBackground: View {
             for x in stride(from: CGFloat(0), to: size.width, by: gridSize) {
                 for y in stride(from: CGFloat(0), to: size.height, by: gridSize) {
                     let rect = CGRect(x: x - dotSize / 2, y: y - dotSize / 2, width: dotSize, height: dotSize)
-                    context.fill(Path(ellipseIn: rect), with: .color(.white.opacity(0.08)))
+                    context.fill(Path(ellipseIn: rect), with: .color(GlassTheme.textTertiary.opacity(0.15)))
                 }
             }
         }

@@ -88,7 +88,7 @@ struct MemoryManagerView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -179,7 +179,7 @@ struct MemoryManagerView: View {
                 .buttonStyle(.plain)
             }
             .padding(14)
-            .background(Color.white.opacity(0.7))
+            .background(GlassTheme.headerBackground)
 
             Divider().opacity(0.3)
 
@@ -188,7 +188,7 @@ struct MemoryManagerView: View {
                 .scrollContentBackground(.hidden)
                 .padding(12)
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 }
 

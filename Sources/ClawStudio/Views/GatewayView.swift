@@ -66,7 +66,7 @@ struct GatewayView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.headerBackground)
     }
 
     // MARK: - Connection Hero
@@ -388,6 +388,7 @@ struct RunActionCard: View {
     var runner: CommandRunner?
     let arguments: [String]
     var customAction: (() -> Void)?
+    @State private var isHovered = false
 
     var body: some View {
         Button {
@@ -402,7 +403,7 @@ struct RunActionCard: View {
             HStack(spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(color.opacity(0.15))
+                        .fill(color.opacity(isHovered ? 0.25 : 0.15))
                         .frame(width: 36, height: 36)
 
                     Image(systemName: icon)
@@ -422,12 +423,15 @@ struct RunActionCard: View {
 
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 16))
-                    .foregroundStyle(color.opacity(0.5))
+                    .foregroundStyle(color.opacity(isHovered ? 0.8 : 0.5))
             }
             .padding(12)
             .glassCard()
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in isHovered = hovering }
     }
 }
 

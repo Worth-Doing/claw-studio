@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         NavigationSplitView {
@@ -13,8 +14,11 @@ struct ContentView: View {
                     .ignoresSafeArea()
 
                 mainContent
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
+            .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
         }
+        .preferredColorScheme(appState.preferences.resolvedColorScheme)
         .task {
             await appState.initialLoad()
         }
@@ -55,6 +59,10 @@ struct ContentView: View {
 
 struct SidebarView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var workspaceSectionExpanded = true
+    @State private var engineSectionExpanded = true
+    @State private var systemSectionExpanded = true
 
     private let workspaceTabs: [NavigationTab] = [.chat, .sessions, .agents]
     private let openclawTabs: [NavigationTab] = [.gateway, .apiKeys, .models, .integrations, .skills]
@@ -72,43 +80,61 @@ struct SidebarView: View {
             ScrollView {
                 VStack(spacing: 2) {
                     // Workspace section
-                    GlassSectionHeader(title: "Workspace", icon: "square.grid.2x2")
-                    ForEach(workspaceTabs) { tab in
-                        SidebarButton(
-                            title: tab.rawValue,
-                            icon: tab.icon,
-                            isSelected: appState.selectedTab == tab,
-                            badge: badgeCount(for: tab)
-                        ) {
-                            appState.selectedTab = tab
+                    DisclosureGroup(isExpanded: $workspaceSectionExpanded) {
+                        ForEach(workspaceTabs) { tab in
+                            SidebarButton(
+                                title: tab.rawValue,
+                                icon: tab.icon,
+                                isSelected: appState.selectedTab == tab,
+                                badge: badgeCount(for: tab)
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    appState.selectedTab = tab
+                                }
+                            }
                         }
+                    } label: {
+                        GlassSectionHeader(title: "Workspace", icon: "square.grid.2x2")
                     }
+                    .disclosureGroupStyle(SidebarDisclosureStyle())
 
                     // OpenClaw section
-                    GlassSectionHeader(title: "OpenClaw Engine", icon: "bolt.fill")
-                    ForEach(openclawTabs) { tab in
-                        SidebarButton(
-                            title: tab.rawValue,
-                            icon: tab.icon,
-                            isSelected: appState.selectedTab == tab,
-                            badge: badgeCount(for: tab)
-                        ) {
-                            appState.selectedTab = tab
+                    DisclosureGroup(isExpanded: $engineSectionExpanded) {
+                        ForEach(openclawTabs) { tab in
+                            SidebarButton(
+                                title: tab.rawValue,
+                                icon: tab.icon,
+                                isSelected: appState.selectedTab == tab,
+                                badge: badgeCount(for: tab)
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    appState.selectedTab = tab
+                                }
+                            }
                         }
+                    } label: {
+                        GlassSectionHeader(title: "OpenClaw Engine", icon: "bolt.fill")
                     }
+                    .disclosureGroupStyle(SidebarDisclosureStyle())
 
                     // System section
-                    GlassSectionHeader(title: "System", icon: "desktopcomputer")
-                    ForEach(systemTabs) { tab in
-                        SidebarButton(
-                            title: tab.rawValue,
-                            icon: tab.icon,
-                            isSelected: appState.selectedTab == tab,
-                            badge: badgeCount(for: tab)
-                        ) {
-                            appState.selectedTab = tab
+                    DisclosureGroup(isExpanded: $systemSectionExpanded) {
+                        ForEach(systemTabs) { tab in
+                            SidebarButton(
+                                title: tab.rawValue,
+                                icon: tab.icon,
+                                isSelected: appState.selectedTab == tab,
+                                badge: badgeCount(for: tab)
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    appState.selectedTab = tab
+                                }
+                            }
                         }
+                    } label: {
+                        GlassSectionHeader(title: "System", icon: "desktopcomputer")
                     }
+                    .disclosureGroupStyle(SidebarDisclosureStyle())
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 6)
@@ -127,6 +153,22 @@ struct SidebarView: View {
                                 appState.activeSessionId = session.id
                                 appState.selectedTab = .chat
                             }
+                            .contextMenu {
+                                Button("Open in Chat") {
+                                    appState.activeSessionId = session.id
+                                    appState.selectedTab = .chat
+                                }
+                                Button("Duplicate") {
+                                    appState.duplicateSession(session.id)
+                                }
+                                Button("Clear Messages") {
+                                    appState.clearSession(session.id)
+                                }
+                                Divider()
+                                Button("Delete", role: .destructive) {
+                                    appState.deleteSession(session.id)
+                                }
+                            }
                     }
                 }
                 .padding(.horizontal, 10)
@@ -138,6 +180,19 @@ struct SidebarView: View {
                 VStack(spacing: 2) {
                     ForEach(appState.agents.filter { $0.isActive }) { agent in
                         AgentSidebarItem(agent: agent)
+                            .contextMenu {
+                                Button("Configure") {
+                                    appState.selectedTab = .agents
+                                }
+                                Button(agent.isActive ? "Deactivate" : "Activate") {
+                                    if let idx = appState.agents.firstIndex(where: { $0.id == agent.id }) {
+                                        appState.agents[idx].isActive.toggle()
+                                    }
+                                }
+                                Button("New Session with Agent") {
+                                    appState.createSession(name: "\(agent.name) Session", agentId: agent.id)
+                                }
+                            }
                     }
                 }
                 .padding(.horizontal, 10)
@@ -148,7 +203,7 @@ struct SidebarView: View {
             engineStatus
                 .padding(12)
         }
-        .background(Color.white.opacity(0.7))
+        .background(GlassTheme.sidebarBackground)
     }
 
     private var appHeader: some View {
@@ -203,8 +258,12 @@ struct SidebarView: View {
 
     private func badgeCount(for tab: NavigationTab) -> Int? {
         switch tab {
-        case .sessions: return appState.sessions.filter { $0.status == .running }.count
-        case .agents: return appState.agents.filter { $0.isActive }.count
+        case .sessions:
+            let running = appState.sessions.filter { $0.status == .running }.count
+            return running > 0 ? running : nil
+        case .agents:
+            let active = appState.agents.filter { $0.isActive }.count
+            return active > 0 ? active : nil
         case .apiKeys:
             let configured = appState.bridge.providers.filter { $0.isConfigured }.count
             return configured > 0 ? configured : nil
@@ -219,6 +278,28 @@ struct SidebarView: View {
     }
 }
 
+// MARK: - Sidebar Disclosure Style
+
+struct SidebarDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                configuration.label
+            }
+            .buttonStyle(.plain)
+
+            if configuration.isExpanded {
+                configuration.content
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+}
+
 // MARK: - Sidebar Components
 
 struct SidebarButton: View {
@@ -227,6 +308,7 @@ struct SidebarButton: View {
     var isSelected: Bool = false
     var badge: Int? = nil
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -254,16 +336,25 @@ struct SidebarButton: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(isSelected ? GlassTheme.accentPrimary.opacity(0.12) : Color.clear)
+            .background(
+                isSelected
+                    ? GlassTheme.accentPrimary.opacity(0.12)
+                    : (isHovered ? GlassTheme.surfaceHover : Color.clear)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
     }
 }
 
 struct SessionSidebarItem: View {
     let session: AgentSession
     var isActive: Bool
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -279,13 +370,20 @@ struct SessionSidebarItem: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(isActive ? GlassTheme.surfaceHover : Color.clear)
+        .background(
+            isActive
+                ? GlassTheme.surfaceHover
+                : (isHovered ? GlassTheme.surfaceHover.opacity(0.5) : Color.clear)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .onHover { hovering in isHovered = hovering }
     }
 }
 
 struct AgentSidebarItem: View {
     let agent: Agent
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -301,5 +399,9 @@ struct AgentSidebarItem: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
+        .background(isHovered ? GlassTheme.surfaceHover.opacity(0.5) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .onHover { hovering in isHovered = hovering }
     }
 }
