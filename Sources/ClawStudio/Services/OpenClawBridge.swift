@@ -387,47 +387,157 @@ final class OpenClawBridge: ObservableObject {
         }
     }
 
-    // MARK: - Agent Message (non-blocking)
+    // MARK: - Agent Message (direct API call)
+
+    /// Read the OpenClaw config to find the API key and model
+    private static func readOpenClawConfig() -> (apiKey: String, model: String, provider: String)? {
+        let configPath = "\(NSHomeDirectory())/.openclaw/openclaw.json"
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        // Get default model
+        let agentConfig = config["agent"] as? [String: Any]
+        let modelKey = (agentConfig?["model"] as? String) ?? "openrouter/anthropic/claude-3.5-haiku"
+
+        // Parse provider from model key (e.g. "openrouter/anthropic/claude-3.5-haiku")
+        let parts = modelKey.split(separator: "/", maxSplits: 1)
+        let provider = parts.count > 1 ? String(parts[0]) : "openrouter"
+        let modelId = parts.count > 1 ? String(parts[1]) : modelKey
+
+        // Find the right API key
+        let envVars = (config["env"] as? [String: Any])?["vars"] as? [String: String] ?? [:]
+
+        let keyMapping: [String: String] = [
+            "openrouter": "OPENROUTER_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "mistral": "MISTRAL_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "together": "TOGETHER_API_KEY",
+            "fireworks": "FIREWORKS_API_KEY",
+            "xai": "XAI_API_KEY",
+            "cohere": "COHERE_API_KEY",
+            "perplexity": "PERPLEXITY_API_KEY",
+        ]
+
+        let envKeyName = keyMapping[provider] ?? "OPENROUTER_API_KEY"
+
+        // Check config first, then environment
+        let apiKey = envVars[envKeyName]
+            ?? ProcessInfo.processInfo.environment[envKeyName]
+            ?? ""
+
+        guard !apiKey.isEmpty else { return nil }
+
+        return (apiKey: apiKey, model: modelId, provider: provider)
+    }
+
+    /// Resolve the API base URL for a provider
+    private static func apiBaseURL(for provider: String) -> String {
+        switch provider {
+        case "openrouter": return "https://openrouter.ai/api/v1"
+        case "anthropic": return "https://api.anthropic.com/v1"
+        case "openai", "codex": return "https://api.openai.com/v1"
+        case "groq": return "https://api.groq.com/openai/v1"
+        case "mistral": return "https://api.mistral.ai/v1"
+        case "deepseek": return "https://api.deepseek.com/v1"
+        case "together": return "https://api.together.xyz/v1"
+        case "fireworks": return "https://api.fireworks.ai/inference/v1"
+        case "xai": return "https://api.x.ai/v1"
+        case "cohere": return "https://api.cohere.ai/v1"
+        case "perplexity": return "https://api.perplexity.ai"
+        default: return "https://openrouter.ai/api/v1"
+        }
+    }
 
     func sendMessage(_ message: String, thinkingLevel: String = "medium", onOutput: @escaping @MainActor @Sendable (String) -> Void) async {
         isRunning = true
         defer { isRunning = false }
 
-        let path = CLIPathResolver.openclawPath
-
-        let result = await Task.detached { () -> String in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = ["agent", "--message", message, "--thinking", thinkingLevel]
-
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-
-            process.environment = CLIPathResolver.processEnvironment()
-
-            do {
-                try process.run()
-                let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-
-                if let output = String(data: data, encoding: .utf8) {
-                    return output.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                return ""
-            } catch {
-                return "Error: \(error.localizedDescription)"
+        guard let config = Self.readOpenClawConfig() else {
+            await MainActor.run {
+                onOutput("Error: No API key configured. Go to API Keys to set one up, then set a default model in the Models tab.")
             }
-        }.value
+            return
+        }
 
-        if !result.isEmpty {
-            onOutput(result)
-            lastOutput = result
+        let baseURL = Self.apiBaseURL(for: config.provider)
+
+        // Build OpenAI-compatible chat completion request
+        let requestBody: [String: Any] = [
+            "model": config.model,
+            "messages": [
+                ["role": "user", "content": message]
+            ],
+            "max_tokens": 4096
+        ]
+
+        guard let url = URL(string: "\(baseURL)/chat/completions"),
+              let bodyData = try? JSONSerialization.data(withJSONObject: requestBody) else {
+            await MainActor.run {
+                onOutput("Error: Failed to build API request.")
+            }
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = bodyData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 120
+
+        // Some providers want extra headers
+        if config.provider == "openrouter" {
+            request.setValue("ClawStudio/2.0", forHTTPHeaderField: "HTTP-Referer")
+            request.setValue("Claw Studio", forHTTPHeaderField: "X-Title")
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                await MainActor.run { onOutput("Error: Invalid response from API.") }
+                return
+            }
+
+            if httpResponse.statusCode != 200 {
+                let errorText = String(data: data, encoding: .utf8) ?? "Unknown error"
+                await MainActor.run {
+                    onOutput("Error (\(httpResponse.statusCode)): \(errorText)")
+                }
+                return
+            }
+
+            // Parse OpenAI-compatible response
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let choices = json["choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let messageObj = firstChoice["message"] as? [String: Any],
+               let content = messageObj["content"] as? String {
+                await MainActor.run {
+                    onOutput(content)
+                    self.lastOutput = content
+                }
+            } else {
+                let raw = String(data: data, encoding: .utf8) ?? "No response"
+                await MainActor.run { onOutput("Error parsing response: \(raw.prefix(500))") }
+            }
+        } catch {
+            await MainActor.run {
+                onOutput("Error: \(error.localizedDescription)")
+            }
         }
     }
 
+    private var urlSessionTask: URLSessionTask?
+
     func stopCurrentProcess() {
+        urlSessionTask?.cancel()
         process?.terminate()
         process = nil
         isRunning = false
