@@ -454,7 +454,22 @@ final class OpenClawBridge: ObservableObject {
         }
     }
 
-    func sendMessage(_ message: String, thinkingLevel: String = "medium", onOutput: @escaping @MainActor @Sendable (String) -> Void) async {
+    /// System prompt that defines the agent's identity
+    private static let systemPrompt = """
+    You are a helpful AI assistant running inside Claw Studio, an Agent Operating System for macOS. \
+    You are powered by OpenClaw and can help users with a wide range of tasks including coding, analysis, \
+    research, writing, problem-solving, and general questions. \
+    Be concise, direct, and helpful. Use markdown formatting when appropriate. \
+    You are having a conversation — remember context from earlier messages.
+    """
+
+    func sendMessage(
+        _ message: String,
+        history: [ChatMessage] = [],
+        modelOverride: String? = nil,
+        thinkingLevel: String = "medium",
+        onOutput: @escaping @MainActor @Sendable (String) -> Void
+    ) async {
         isRunning = true
         defer { isRunning = false }
 
@@ -465,14 +480,45 @@ final class OpenClawBridge: ObservableObject {
             return
         }
 
-        let baseURL = Self.apiBaseURL(for: config.provider)
+        // Use model override from app preferences if provided
+        let finalModel: String
+        let finalProvider: String
+        if let override = modelOverride, !override.isEmpty {
+            let parts = override.split(separator: "/", maxSplits: 1)
+            finalProvider = parts.count > 1 ? String(parts[0]) : config.provider
+            finalModel = parts.count > 1 ? String(parts[1]) : override
+        } else {
+            finalModel = config.model
+            finalProvider = config.provider
+        }
 
-        // Build OpenAI-compatible chat completion request
+        let baseURL = Self.apiBaseURL(for: finalProvider)
+
+        // Build messages array with system prompt + conversation history
+        var messages: [[String: String]] = [
+            ["role": "system", "content": Self.systemPrompt]
+        ]
+
+        // Add conversation history (last 20 messages for context window)
+        for msg in history.suffix(20) {
+            let role: String
+            switch msg.role {
+            case .user: role = "user"
+            case .assistant: role = "assistant"
+            case .system: role = "system"
+            case .tool: continue
+            }
+            if !msg.content.isEmpty && !msg.isStreaming {
+                messages.append(["role": role, "content": msg.content])
+            }
+        }
+
+        // Add the current message
+        messages.append(["role": "user", "content": message])
+
         let requestBody: [String: Any] = [
-            "model": config.model,
-            "messages": [
-                ["role": "user", "content": message]
-            ],
+            "model": finalModel,
+            "messages": messages,
             "max_tokens": 4096
         ]
 
@@ -491,8 +537,7 @@ final class OpenClawBridge: ObservableObject {
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 120
 
-        // Some providers want extra headers
-        if config.provider == "openrouter" {
+        if finalProvider == "openrouter" {
             request.setValue("ClawStudio/2.0", forHTTPHeaderField: "HTTP-Referer")
             request.setValue("Claw Studio", forHTTPHeaderField: "X-Title")
         }
@@ -513,7 +558,6 @@ final class OpenClawBridge: ObservableObject {
                 return
             }
 
-            // Parse OpenAI-compatible response
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let choices = json["choices"] as? [[String: Any]],
                let firstChoice = choices.first,

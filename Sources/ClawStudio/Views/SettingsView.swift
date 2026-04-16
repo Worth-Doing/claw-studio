@@ -92,7 +92,10 @@ struct SettingsView: View {
 
                         Picker("Model", selection: Binding(
                             get: { appState.preferences.defaultModel },
-                            set: { appState.preferences.defaultModel = $0 }
+                            set: { newValue in
+                                appState.preferences.defaultModel = newValue
+                                appState.preferences.syncModelToConfig(newValue)
+                            }
                         )) {
                             let available = appState.bridge.allModels.filter { $0.available == true }
                             if available.isEmpty {

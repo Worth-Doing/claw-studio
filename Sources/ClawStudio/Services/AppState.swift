@@ -49,7 +49,7 @@ enum NavigationTab: String, CaseIterable, Identifiable {
 
 final class UserPreferences: ObservableObject {
     @AppStorage("workspacePath") var workspacePath = "~/.openclaw/workspace"
-    @AppStorage("defaultModel") var defaultModel = "openrouter/anthropic/claude-haiku-4.5"
+    @AppStorage("defaultModel") var defaultModel = UserPreferences.readModelFromConfig()
     @AppStorage("thinkingLevel") var thinkingLevel = "medium"
     @AppStorage("autoSave") var autoSave = true
     @AppStorage("showTokenCost") var showTokenCost = true
@@ -60,6 +60,33 @@ final class UserPreferences: ObservableObject {
         case "light": return .light
         case "dark": return .dark
         default: return nil // system
+        }
+    }
+
+    /// Read the actual default model from OpenClaw config at startup
+    static func readModelFromConfig() -> String {
+        let configPath = "\(NSHomeDirectory())/.openclaw/openclaw.json"
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let agent = config["agent"] as? [String: Any],
+           let model = agent["model"] as? String, !model.isEmpty {
+            return model
+        }
+        return "openrouter/anthropic/claude-haiku-4.5"
+    }
+
+    /// Sync the selected model back to OpenClaw config
+    func syncModelToConfig(_ modelKey: String) {
+        Task.detached {
+            let path = CLIPathResolver.openclawPath
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = ["models", "set", modelKey]
+            process.environment = CLIPathResolver.processEnvironment()
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            try? process.run()
+            process.waitUntilExit()
         }
     }
 }
@@ -247,7 +274,11 @@ final class AppState: ObservableObject {
         session.messages.append(assistantMessage)
         activeSession = session
 
-        await bridge.sendMessage(content, thinkingLevel: preferences.thinkingLevel) { @MainActor [weak self] output in
+        // Pass conversation history and model from preferences
+        let history = session.messages.filter { $0.id != assistantId }
+        let modelOverride = preferences.defaultModel
+
+        await bridge.sendMessage(content, history: history, modelOverride: modelOverride, thinkingLevel: preferences.thinkingLevel) { @MainActor [weak self] output in
             guard let self else { return }
             let updatedMessage = ChatMessage(id: assistantId, role: .assistant, content: output, isStreaming: false)
             if var session = self.activeSession {
