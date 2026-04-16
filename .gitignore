@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+.DS_Store
+*.dmg
+dmg_staging/
+Resources/AppIcon.iconset/
+Resources/icon_1024.png
+Claw Studio.app/
